@@ -2,12 +2,16 @@
   "name": "localimpact-project",
   "version": "0.1.0",
   "private": true,
-  "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
-  },
+ "scripts": {
+  "dev": "next dev",
+  "build": "next build",
+  "start": "next start",
+  "lint": "eslint",
+  "test": "vitest run",
+  "test:unit": "vitest run tests/unit",
+  "test:watch": "vitest",
+  "test:coverage": "vitest run --coverage"
+},
   "dependencies": {
     "@prisma/adapter-pg": "^7.10.1",
     "@prisma/client": "^7.10.1",

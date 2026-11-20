@@ -174,14 +174,14 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
     }
 
     return NextResponse.json({
-      comment: {
-        id: result.comment.id,
-        content: result.comment.content,
-        createdAt: result.comment.createdAt.toISOString(),
-        authorId: result.comment.user.id,
-        authorName: result.comment.user.name,
-      },
-    });
+  comment: {
+    id: result.comment.id,
+    content: result.comment.content,
+    createdAt: result.comment.createdAt.toISOString(),
+    authorId: result.comment.userId,
+    authorName: result.comment.user.name,
+  },
+});
   } catch (error) {
     return reportErrorResponse(error);
   }

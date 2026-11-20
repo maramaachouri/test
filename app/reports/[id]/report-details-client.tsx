@@ -590,9 +590,10 @@ export default function ReportDetailsPage({
   }
 
   const category = categoryLabels[report.category] ?? report.category ?? "Autre";
-  const canEditReport =
-    currentUser.role === "ADMIN" ||
-    (report.creatorId === currentUser.id && report.statusCode === "PENDING");
+const canEditReport =
+  currentUser.role === "USER" &&
+  report.creatorId === currentUser.id &&
+  report.statusCode === "PENDING";
   const isClosed =
     report.statusCode === "RESOLVED" || report.statusCode === "REJECTED";
   const formattedDate = report.createdAt

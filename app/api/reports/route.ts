@@ -3,7 +3,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth/dal";
 
-const categoryMap: Record<string, "ROADS" | "LIGHTING" | "GREEN_SPACES" | "CLEANLINESS" | "OTHER"> = {
+const categoryMap: Record<
+  string,
+  "ROADS" | "LIGHTING" | "GREEN_SPACES" | "CLEANLINESS" | "OTHER"
+> = {
   routes: "ROADS",
   eclairage: "LIGHTING",
   "espaces-verts": "GREEN_SPACES",
@@ -30,19 +33,34 @@ function formatReport(
     longitude: number;
     photoUrl: string | null;
     createdAt: Date;
+    creatorId: string;
     assignedToId?: string | null;
     assignedTo?: { name: string } | null;
-    _count?: { supports: number };
+    _count?: {
+      supports: number;
+      comments: number;
+      history: number;
+    };
   },
-  includeDetails = false
+  currentUser: { id: string; role: string }
 ) {
+  const canDelete =
+    (
+      currentUser.role === "ADMIN" ||
+      (report.creatorId === currentUser.id && report.status === "PENDING")
+    ) &&
+    (report._count?.comments ?? 0) === 0 &&
+    (report._count?.supports ?? 0) === 0 &&
+    (report._count?.history ?? 0) === 0;
+
   return {
     id: report.id,
     title: report.title,
     description: report.description,
-    category: Object.entries(categoryMap).find(
-      ([, value]) => value === report.category
-    )?.[0] ?? "autre",
+    category:
+      Object.entries(categoryMap).find(
+        ([, value]) => value === report.category
+      )?.[0] ?? "autre",
     location: report.address,
     coordinates: {
       lat: report.latitude,
@@ -50,14 +68,12 @@ function formatReport(
     },
     photoName: report.photoUrl,
     status: statusMap[report.status] ?? report.status,
-    ...(includeDetails
-      ? {
-          statusCode: report.status,
-          supportCount: report._count?.supports ?? 0,
-          assignedToId: report.assignedToId ?? null,
-          assignedToName: report.assignedTo?.name ?? null,
-        }
-      : {}),
+    statusCode: report.status,
+    supportCount: report._count?.supports ?? 0,
+    creatorId: report.creatorId,
+    canDelete,
+    assignedToId: report.assignedToId ?? null,
+    assignedToName: report.assignedTo?.name ?? null,
     createdAt: report.createdAt.toISOString(),
   };
 }
@@ -65,15 +81,34 @@ function formatReport(
 // GET : récupérer tous les signalements
 export async function GET() {
   try {
+    const currentUser = await getCurrentUser();
+
+    if (!currentUser) {
+      return NextResponse.json(
+        { message: "Vous devez être connecté." },
+        { status: 401 }
+      );
+    }
+
     const reports = await prisma.report.findMany({
       orderBy: { createdAt: "desc" },
       include: {
-        _count: { select: { supports: true } },
-        assignedTo: { select: { name: true } },
+        _count: {
+          select: {
+            supports: true,
+            comments: true,
+            history: true,
+          },
+        },
+        assignedTo: {
+          select: { name: true },
+        },
       },
     });
 
-    return NextResponse.json(reports.map((report) => formatReport(report, true)));
+    return NextResponse.json(
+      reports.map((report) => formatReport(report, currentUser))
+    );
   } catch (error) {
     console.error("Erreur GET reports :", error);
 
@@ -88,6 +123,7 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     let body: unknown;
+
     try {
       body = await request.json();
     } catch {
@@ -122,10 +158,16 @@ export async function POST(request: NextRequest) {
       typeof coordinates.lng !== "number"
     ) {
       return NextResponse.json(
-        { message: "Veuillez fournir toutes les informations obligatoires, y compris la position sur la carte." },
+        {
+          message:
+            "Veuillez fournir toutes les informations obligatoires, y compris la position sur la carte.",
+        },
         { status: 400 }
       );
     }
+
+    const latitude = coordinates.lat;
+    const longitude = coordinates.lng;
 
     if (
       title.trim().length < 5 ||
@@ -134,12 +176,12 @@ export async function POST(request: NextRequest) {
       description.trim().length > 2000 ||
       location.trim().length < 1 ||
       location.trim().length > 200 ||
-      coordinates.lat < -90 ||
-      coordinates.lat > 90 ||
-      coordinates.lng < -180 ||
-      coordinates.lng > 180 ||
-      !Number.isFinite(coordinates.lat) ||
-      !Number.isFinite(coordinates.lng) ||
+      latitude < -90 ||
+      latitude > 90 ||
+      longitude < -180 ||
+      longitude > 180 ||
+      !Number.isFinite(latitude) ||
+      !Number.isFinite(longitude) ||
       !categoryMap[category]
     ) {
       return NextResponse.json(
@@ -152,7 +194,10 @@ export async function POST(request: NextRequest) {
 
     if (!currentUser) {
       return NextResponse.json(
-        { message: "Vous devez être connecté pour créer un signalement." },
+        {
+          message:
+            "Vous devez être connecté pour créer un signalement.",
+        },
         { status: 401 }
       );
     }
@@ -164,8 +209,8 @@ export async function POST(request: NextRequest) {
           description: description.trim(),
           category: categoryMap[category],
           address: location.trim(),
-          latitude: coordinates.lat,
-          longitude: coordinates.lng,
+          latitude,
+          longitude,
           creatorId: currentUser.id,
         },
       });
@@ -195,7 +240,22 @@ export async function POST(request: NextRequest) {
       return createdReport;
     });
 
-    return NextResponse.json(formatReport(report), { status: 201 });
+    return NextResponse.json(
+      {
+        ...formatReport(
+          {
+            ...report,
+            _count: {
+              supports: 0,
+              comments: 0,
+              history: 1,
+            },
+          },
+          currentUser
+        ),
+      },
+      { status: 201 }
+    );
   } catch (error) {
     console.error("Erreur POST reports :", error);
 

@@ -1,3 +1,4 @@
+
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
@@ -8,7 +9,12 @@ function getActivitySummary(description: string | null): string {
 
   try {
     const metadata: unknown = JSON.parse(description);
-    if (typeof metadata !== "object" || metadata === null || !("action" in metadata)) {
+
+    if (
+      typeof metadata !== "object" ||
+      metadata === null ||
+      !("action" in metadata)
+    ) {
       return "Statut ou affectation mis à jour";
     }
 
@@ -49,32 +55,63 @@ export async function GET() {
       rejected,
       byCategory,
       recentActivities,
-    ] =
-      await prisma.$transaction([
-        prisma.report.count(),
-        prisma.report.count({ where: { status: "PENDING" } }),
-        prisma.report.count({ where: { status: "IN_PROGRESS" } }),
-        prisma.report.count({ where: { status: "RESOLVED" } }),
-        prisma.report.count({ where: { status: "REJECTED" } }),
-        prisma.report.groupBy({
-          by: ["category"],
-          _count: { _all: true },
-          orderBy: { category: "asc" },
-        }),
-        prisma.reportHistory.findMany({
-          orderBy: { createdAt: "desc" },
-          take: 5,
-          select: {
-            id: true,
-            reportId: true,
-            oldStatus: true,
-            newStatus: true,
-            description: true,
-            createdAt: true,
-            report: { select: { title: true } },
+    ] = await prisma.$transaction([
+      prisma.report.count(),
+
+      prisma.report.count({
+        where: { status: "PENDING" },
+      }),
+
+      prisma.report.count({
+        where: { status: "IN_PROGRESS" },
+      }),
+
+      prisma.report.count({
+        where: { status: "RESOLVED" },
+      }),
+
+      prisma.report.count({
+        where: { status: "REJECTED" },
+      }),
+
+      prisma.report.groupBy({
+        by: ["category"],
+        _count: {
+          _all: true,
+        },
+        orderBy: {
+          category: "asc",
+        },
+      }),
+
+      prisma.reportHistory.findMany({
+        orderBy: { createdAt: "desc" },
+        take: 5,
+        select: {
+          id: true,
+          reportId: true,
+          oldStatus: true,
+          newStatus: true,
+          description: true,
+          createdAt: true,
+          report: {
+            select: { title: true },
           },
-        }),
-      ]);
+        },
+      }),
+    ]);
+
+    const categoryCounts = Object.fromEntries(
+      byCategory.map((item) => {
+        const count =
+          typeof item._count === "object" &&
+          item._count !== null
+            ? item._count._all ?? 0
+            : 0;
+
+        return [item.category, count];
+      })
+    );
 
     return NextResponse.json({
       total,
@@ -82,9 +119,8 @@ export async function GET() {
       inProgress,
       resolved,
       rejected,
-      byCategory: Object.fromEntries(
-        byCategory.map((item) => [item.category, item._count._all])
-      ),
+      byCategory: categoryCounts,
+
       recentActivities: recentActivities.map((activity) => ({
         id: activity.id,
         reportId: activity.reportId,
@@ -97,6 +133,7 @@ export async function GET() {
     });
   } catch (error) {
     console.error("Erreur GET report stats :", error);
+
     return NextResponse.json(
       { message: "Impossible de récupérer les statistiques." },
       { status: 500 }

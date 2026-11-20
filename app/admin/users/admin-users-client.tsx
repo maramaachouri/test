@@ -26,8 +26,11 @@ export default function AdminUsersClient({
   const [savingId, setSavingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [message, setMessage] = useState("");
-  const [messageType, setMessageType] = useState<"success" | "error" | "">("");
+  const [messageType, setMessageType] = useState<
+    "success" | "error" | ""
+  >("");
 
+  // Modifier le rôle d'un utilisateur
   async function handleRoleChange(userId: string) {
     const newRole = selectedRoles[userId];
 
@@ -51,43 +54,6 @@ export default function AdminUsersClient({
 
       if (!response.ok) {
         throw new Error(data.message || "Une erreur est survenue.");
-      }
-
-      async function handleDelete(userId: string) {
-        if (!window.confirm("Supprimer définitivement ce compte utilisateur ?")) {
-          return;
-        }
-
-        setDeletingId(userId);
-        setMessage("");
-        setMessageType("");
-
-        try {
-          const response = await fetch(
-            `/api/admin/users?id=${encodeURIComponent(userId)}`,
-            { method: "DELETE" }
-          );
-          const data = await response.json();
-
-          if (!response.ok) {
-            throw new Error(data.message || "Impossible de supprimer l'utilisateur.");
-          }
-
-          setUsers((previousUsers) =>
-            previousUsers.filter((user) => user.id !== userId)
-          );
-          setMessage(data.message || "Utilisateur supprimé.");
-          setMessageType("success");
-        } catch (error) {
-          setMessage(
-            error instanceof Error
-              ? error.message
-              : "Impossible de supprimer l'utilisateur."
-          );
-          setMessageType("error");
-        } finally {
-          setDeletingId(null);
-        }
       }
 
       setUsers((previousUsers) =>
@@ -116,6 +82,58 @@ export default function AdminUsersClient({
       }
     } finally {
       setSavingId(null);
+    }
+  }
+
+  // Supprimer un utilisateur
+  async function handleDelete(userId: string) {
+    if (
+      !window.confirm(
+        "Supprimer définitivement ce compte utilisateur ?"
+      )
+    ) {
+      return;
+    }
+
+    setDeletingId(userId);
+    setMessage("");
+    setMessageType("");
+
+    try {
+      const response = await fetch(
+        `/api/admin/users?id=${encodeURIComponent(userId)}`,
+        { method: "DELETE" }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.message || "Impossible de supprimer l'utilisateur."
+        );
+      }
+
+      setUsers((previousUsers) =>
+        previousUsers.filter((user) => user.id !== userId)
+      );
+
+      setSelectedRoles((previous) => {
+        const updated = { ...previous };
+        delete updated[userId];
+        return updated;
+      });
+
+      setMessage(data.message || "Utilisateur supprimé.");
+      setMessageType("success");
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Impossible de supprimer l'utilisateur."
+      );
+      setMessageType("error");
+    } finally {
+      setDeletingId(null);
     }
   }
 
@@ -183,7 +201,10 @@ export default function AdminUsersClient({
                         [user.id]: event.target.value as UserRole,
                       }))
                     }
-                    disabled={savingId === user.id}
+                    disabled={
+                      savingId === user.id ||
+                      deletingId === user.id
+                    }
                     className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-blue-500"
                   >
                     {roles.map((role) => (
@@ -196,21 +217,30 @@ export default function AdminUsersClient({
 
                 <td className="px-5 py-4">
                   <button
-                    onClick={() => handleRoleChange(user.id)}
+                    onClick={() => void handleRoleChange(user.id)}
                     disabled={
                       savingId === user.id ||
+                      deletingId === user.id ||
                       selectedRoles[user.id] === user.role
                     }
                     className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
                   >
-                    {savingId === user.id ? "En cours..." : "Modifier"}
+                    {savingId === user.id
+                      ? "En cours..."
+                      : "Modifier"}
                   </button>
+
                   <button
                     onClick={() => void handleDelete(user.id)}
-                    disabled={savingId === user.id || deletingId === user.id}
+                    disabled={
+                      savingId === user.id ||
+                      deletingId === user.id
+                    }
                     className="ml-2 rounded-lg border border-red-200 px-3 py-2 text-xs font-semibold text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {deletingId === user.id ? "Suppression..." : "Supprimer"}
+                    {deletingId === user.id
+                      ? "Suppression..."
+                      : "Supprimer"}
                   </button>
                 </td>
               </tr>

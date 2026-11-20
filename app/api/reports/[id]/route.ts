@@ -1,3 +1,4 @@
+
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
@@ -27,13 +28,15 @@ const updateReportSchema = z
   .object({
     title: z.string().trim().min(5).max(120).optional(),
     description: z.string().trim().min(10).max(2000).optional(),
-    category: z.enum([
-      "routes",
-      "eclairage",
-      "espaces-verts",
-      "proprete",
-      "autre",
-    ]).optional(),
+    category: z
+      .enum([
+        "routes",
+        "eclairage",
+        "espaces-verts",
+        "proprete",
+        "autre",
+      ])
+      .optional(),
     location: z.string().trim().min(1).max(200).optional(),
     coordinates: z
       .object({
@@ -44,25 +47,40 @@ const updateReportSchema = z
   })
   .refine((value) => Object.keys(value).length > 0);
 
-function formatReport(report: {
-  id: string;
-  title: string;
-  description: string;
-  category: string;
-  status: string;
-  address: string;
-  latitude: number;
-  longitude: number;
-  photoUrl: string | null;
-  createdAt: Date;
-  creatorId: string;
-  assignedToId: string | null;
-  assignedTo: { name: string } | null;
-  _count: { supports: number; comments: number; history: number };
-}) {
-  const category = Object.entries(categoryMap).find(
-    ([, value]) => value === report.category
-  )?.[0] ?? "autre";
+function formatReport(
+  report: {
+    id: string;
+    title: string;
+    description: string;
+    category: string;
+    status: string;
+    address: string;
+    latitude: number;
+    longitude: number;
+    photoUrl: string | null;
+    createdAt: Date;
+    creatorId: string;
+    assignedToId: string | null;
+    assignedTo: { name: string } | null;
+    _count: {
+      supports: number;
+      comments: number;
+      history: number;
+    };
+  },
+  currentUser: { id: string; role: string }
+) {
+  const category =
+    Object.entries(categoryMap).find(
+      ([, value]) => value === report.category
+    )?.[0] ?? "autre";
+
+const canDelete =
+  currentUser.role === "USER" &&
+  report.creatorId === currentUser.id &&
+  report.status === "PENDING" &&
+  report._count.comments === 0 &&
+  report._count.supports === 0;
 
   return {
     id: report.id,
@@ -70,25 +88,44 @@ function formatReport(report: {
     description: report.description,
     category,
     location: report.address,
-    coordinates: { lat: report.latitude, lng: report.longitude },
+    coordinates: {
+      lat: report.latitude,
+      lng: report.longitude,
+    },
     photoName: report.photoUrl,
     status: statusLabels[report.status] ?? report.status,
     statusCode: report.status,
     supportCount: report._count.supports,
     creatorId: report.creatorId,
-    canDelete:
-      report._count.comments === 0 &&
-      report._count.supports === 0 &&
-      report._count.history === 0,
+    canDelete,
     createdAt: report.createdAt.toISOString(),
     assignedToId: report.assignedToId,
     assignedToName: report.assignedTo?.name ?? null,
   };
 }
 
-export async function GET(_request: NextRequest, context: RouteContext) {
+const reportInclude = {
+  _count: {
+    select: {
+      supports: true,
+      comments: true,
+      history: true,
+    },
+  },
+  assignedTo: {
+    select: {
+      name: true,
+    },
+  },
+} as const;
+
+export async function GET(
+  _request: NextRequest,
+  context: RouteContext
+) {
   try {
     const user = await getCurrentUser();
+
     if (!user) {
       return NextResponse.json(
         { message: "Vous devez être connecté." },
@@ -97,14 +134,10 @@ export async function GET(_request: NextRequest, context: RouteContext) {
     }
 
     const { id } = await context.params;
+
     const report = await prisma.report.findUnique({
       where: { id },
-      include: {
-        _count: {
-          select: { supports: true, comments: true, history: true },
-        },
-        assignedTo: { select: { name: true } },
-      },
+      include: reportInclude,
     });
 
     if (!report) {
@@ -114,9 +147,10 @@ export async function GET(_request: NextRequest, context: RouteContext) {
       );
     }
 
-    return NextResponse.json(formatReport(report));
+    return NextResponse.json(formatReport(report, user));
   } catch (error) {
     console.error("Erreur GET report :", error);
+
     return NextResponse.json(
       { message: "Impossible de récupérer le signalement." },
       { status: 500 }
@@ -124,9 +158,13 @@ export async function GET(_request: NextRequest, context: RouteContext) {
   }
 }
 
-export async function PATCH(request: NextRequest, context: RouteContext) {
+export async function PATCH(
+  request: NextRequest,
+  context: RouteContext
+) {
   try {
     const user = await getCurrentUser();
+
     if (!user) {
       return NextResponse.json(
         { message: "Vous devez être connecté." },
@@ -135,6 +173,7 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
     }
 
     let body: unknown;
+
     try {
       body = await request.json();
     } catch {
@@ -145,6 +184,7 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
     }
 
     const validation = updateReportSchema.safeParse(body);
+
     if (!validation.success) {
       return NextResponse.json(
         { message: "Données du signalement invalides." },
@@ -153,29 +193,40 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
     }
 
     const { id } = await context.params;
+
     const result = await prisma.$transaction(async (transaction) => {
-      const current = await transaction.report.findUnique({ where: { id } });
+      const current = await transaction.report.findUnique({
+        where: { id },
+      });
+
       if (!current) {
         return { kind: "not_found" as const };
       }
 
       const canEdit =
-        user.role === "ADMIN" ||
-        (current.creatorId === user.id && current.status === "PENDING");
+        user.role === "USER" &&
+        current.creatorId === user.id &&
+        current.status === "PENDING";
+
       if (!canEdit) {
         return { kind: "forbidden" as const };
       }
 
       const input = validation.data;
+
       const data = {
-        ...(input.title !== undefined ? { title: input.title } : {}),
+        ...(input.title !== undefined
+          ? { title: input.title }
+          : {}),
         ...(input.description !== undefined
           ? { description: input.description }
           : {}),
         ...(input.category !== undefined
           ? { category: categoryMap[input.category] }
           : {}),
-        ...(input.location !== undefined ? { address: input.location } : {}),
+        ...(input.location !== undefined
+          ? { address: input.location }
+          : {}),
         ...(input.coordinates !== undefined
           ? {
               latitude: input.coordinates.lat,
@@ -187,12 +238,7 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
       const updated = await transaction.report.update({
         where: { id },
         data,
-        include: {
-          _count: {
-            select: { supports: true, comments: true, history: true },
-          },
-          assignedTo: { select: { name: true } },
-        },
+        include: reportInclude,
       });
 
       await transaction.reportHistory.create({
@@ -225,7 +271,10 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
         },
       });
 
-      return { kind: "updated" as const, report: updated };
+      return {
+        kind: "updated" as const,
+        report: updated,
+      };
     });
 
     if (result.kind === "not_found") {
@@ -234,16 +283,31 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
         { status: 404 }
       );
     }
+
     if (result.kind === "forbidden") {
       return NextResponse.json(
-        { message: "Seul le créateur d'un signalement en attente ou un administrateur peut le modifier." },
+        {
+          message:
+            "Seul le créateur d'un signalement en attente peut le modifier.",
+        },
         { status: 403 }
       );
     }
 
-    return NextResponse.json(formatReport(result.report));
+    // Une modification ajoute une nouvelle entrée dans l'historique.
+    // On actualise donc le compteur pour renvoyer les bonnes permissions.
+    const updatedReport = {
+      ...result.report,
+      _count: {
+        ...result.report._count,
+        history: result.report._count.history + 1,
+      },
+    };
+
+    return NextResponse.json(formatReport(updatedReport, user));
   } catch (error) {
     console.error("Erreur PATCH report :", error);
+
     return NextResponse.json(
       { message: "Impossible de modifier le signalement." },
       { status: 500 }
@@ -251,9 +315,14 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
   }
 }
 
-export async function DELETE(_request: NextRequest, context: RouteContext) {
+
+export async function DELETE(
+  _request: NextRequest,
+  context: RouteContext
+) {
   try {
     const user = await getCurrentUser();
+
     if (!user) {
       return NextResponse.json(
         { message: "Vous devez être connecté." },
@@ -262,12 +331,17 @@ export async function DELETE(_request: NextRequest, context: RouteContext) {
     }
 
     const { id } = await context.params;
+
     const result = await prisma.$transaction(async (transaction) => {
       const report = await transaction.report.findUnique({
         where: { id },
         include: {
           _count: {
-            select: { history: true, comments: true, supports: true },
+            select: {
+              history: true,
+              comments: true,
+              supports: true,
+            },
           },
         },
       });
@@ -276,22 +350,35 @@ export async function DELETE(_request: NextRequest, context: RouteContext) {
         return { kind: "not_found" as const };
       }
 
+      // Seul le propriétaire USER peut supprimer son signalement PENDING.
       const canDelete =
-        user.role === "ADMIN" ||
-        (report.creatorId === user.id && report.status === "PENDING");
+        user.role === "USER" &&
+        report.creatorId === user.id &&
+        report.status === "PENDING";
+
       if (!canDelete) {
         return { kind: "forbidden" as const };
       }
 
+      // On refuse la suppression si le signalement possède
+      // des commentaires, des soutiens ou plusieurs traces d'historique.
       if (
-        report._count.history > 0 ||
         report._count.comments > 0 ||
         report._count.supports > 0
-      ) {
+            ) {
         return { kind: "has_activity" as const };
       }
 
-      await transaction.report.delete({ where: { id } });
+      // Supprimer l'historique initial pour éviter l'erreur P2003.
+      await transaction.reportHistory.deleteMany({
+        where: { reportId: id },
+      });
+
+      // Supprimer ensuite le signalement.
+      await transaction.report.delete({
+        where: { id },
+      });
+
       return { kind: "deleted" as const };
     });
 
@@ -301,34 +388,33 @@ export async function DELETE(_request: NextRequest, context: RouteContext) {
         { status: 404 }
       );
     }
+
     if (result.kind === "forbidden") {
       return NextResponse.json(
-        { message: "Vous n'êtes pas autorisé à supprimer ce signalement." },
+        {
+          message:
+            "Vous n'êtes pas autorisé à supprimer ce signalement.",
+        },
         { status: 403 }
       );
     }
+
     if (result.kind === "has_activity") {
       return NextResponse.json(
-        { message: "Ce signalement possède des commentaires, soutiens ou traces d'historique qui doivent être conservés." },
+        {
+          message:
+            "Ce signalement possède des commentaires, soutiens ou traces d'historique qui doivent être conservés.",
+        },
         { status: 409 }
       );
     }
 
-    return NextResponse.json({ message: "Signalement supprimé." });
+    return NextResponse.json({
+      message: "Signalement supprimé avec succès.",
+    });
   } catch (error) {
-    if (
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      error.code === "P2003"
-    ) {
-      return NextResponse.json(
-        { message: "Ce signalement possède des relations qui doivent être conservées." },
-        { status: 409 }
-      );
-    }
-
     console.error("Erreur DELETE report :", error);
+
     return NextResponse.json(
       { message: "Impossible de supprimer le signalement." },
       { status: 500 }
